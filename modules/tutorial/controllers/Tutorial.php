@@ -5,4 +5,8 @@ class Tutorial extends Trongate {
 		$this->view('first');
 	}
 
+	public function dynamic_sort() {
+		$this->view('dynamic_sort');
+	}
+
 }
