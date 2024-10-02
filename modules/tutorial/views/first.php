@@ -10,7 +10,7 @@
 </head>
 <body>
 	<div class="container">
-		<h1	>Trongate MX</h1>
+		<h1>Trongate MX</h1>
 		<p class="text-center lg">
 			<button mx-get="<?= BASE_URL ?>" 
 				            mx-target="#result" 
@@ -18,7 +18,11 @@
 				            mx-indicator=".spinner">Click Me</button>
 		</p>
 		<div class="spinner mx-indicator"></div>
-		<div id="result"></div>
+		<div id="result"  mx-get="<?= BASE_URL ?>" 
+				            		   mx-target="#result" 
+				            		   mx-select="main" 
+				            		   mx-indicator=".spinner" 
+				            		   mx-trigger="load"></div>
 	</div>
 
 <style>
