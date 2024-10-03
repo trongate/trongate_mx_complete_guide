@@ -1,12 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+	<base href="<?= BASE_URL ?>">
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<base href="<?= BASE_URL ?>">
 	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
 	<link rel="stylesheet" href="css/trongate.css">
 	<link rel="stylesheet" href="css/app.css">
+	<script src="js/trongate-mx.js"></script>
 	<title>Public</title>
 </head>
 <body>

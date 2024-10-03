@@ -70,16 +70,57 @@
                 if (p1 === 'this.value') {
                     return element.value;
                 }
-                // Add more conditions here for other placeholders if needed
+                return match;
+            });
+        },
+        pushUrl(url) {
+            const normalizedUrl = this.normalizeUrl(url);
+            if (normalizedUrl && window.location.href !== normalizedUrl) {
+                history.pushState({}, '', normalizedUrl);
+            }
+        },
+        getRequestUrl(element) {
+            for (const attr of CONFIG.CORE_MX_ATTRIBUTES) {
+                let url = element.getAttribute(attr);
+                if (url) {
+                    url = this.processDynamicUrl(url, element);
+                    return this.normalizeUrl(url);
+                }
+            }
+            return null;
+        },
+        processDynamicUrl(url, element) {
+            return url.replace(/\${([^}]+)}/g, (match, p1) => {
+                if (p1 === 'this.value') {
+                    return element.value;
+                }
                 return match; // Return unchanged if no match
             });
-        }
+        },
+        normalizeUrl(url) {
+            const baseElement = document.querySelector('base');
+            const baseUrl = baseElement ? baseElement.href : window.location.origin + '/';
+
+            // Check if the url already starts with the base URL
+            if (url.startsWith(baseUrl)) {
+                return url; // Return the url as is if it already includes the base URL
+            }
+
+            // Remove leading slash from url if baseUrl ends with a slash
+            if (baseUrl.endsWith('/') && url.startsWith('/')) {
+                url = url.substring(1);
+            }
+
+            // Ensure there's exactly one slash between base URL and the path
+            return baseUrl.replace(/\/?$/, '/') + url.replace(/^\//, '');
+        },
     };
 
     const Http = {
         setupHttpRequest(element, httpMethodAttribute) {
             let targetUrl = element.getAttribute(httpMethodAttribute);
             targetUrl = Utils.parseUrlWithPlaceholders(targetUrl, element);
+            targetUrl = Utils.normalizeUrl(targetUrl);
             const requestType = httpMethodAttribute.replace('mx-', '').toUpperCase();
             Dom.attemptActivateLoader(element);
             
@@ -159,9 +200,9 @@
             return { http, formData, targetElement };
         },
 
-        invokeFormPost(element, triggerEvent, httpMethodAttribute, containingForm) {
+        invokeFormPost(element, triggerEvent, httpMethodAttribute, containingForm, event) {
             const { http, formData, targetElement } = Http.commonHttpRequest(element, httpMethodAttribute, containingForm);
-        
+
             http.onload = function() {
                 Dom.attemptHideLoader(containingForm);
                 
@@ -171,11 +212,11 @@
                 if (shouldResetForm) {
                     containingForm.reset();
                 }
-        
+
                 const responseTarget = element.hasAttribute(httpMethodAttribute) ? element : containingForm;
-                Http.handleHttpResponse(http, responseTarget);
+                Http.handleHttpResponse(http, responseTarget, event);
             };
-        
+
             try {
                 http.send(formData);
             } catch (error) {
@@ -184,16 +225,46 @@
             }
         },
 
-        invokeHttpRequest(element, httpMethodAttribute) {
+        initInvokeHttpRequest(element, httpMethodAttribute, event) {
+            const buildModalStr = element.getAttribute('mx-build-modal');
+
+            if (buildModalStr) {
+                const modalOptions = Utils.parseAttributeValue(buildModalStr);
+
+                if (modalOptions === false) {
+                    console.warn("Invalid JSON in mx-build-modal:", buildModalStr);
+                    return;
+                }
+
+                if (typeof modalOptions === "string") {
+                    const modalData = {
+                        id: modalOptions
+                    };
+                    Modal.buildMXModal(modalData, element, httpMethodAttribute, event);
+                } else {
+                    Modal.buildMXModal(modalOptions, element, httpMethodAttribute, event);
+                }
+            } else {
+                Http.invokeHttpRequest(element, httpMethodAttribute, event);
+            }
+        },
+
+        invokeHttpRequest(element, httpMethodAttribute, event) {
             const { http, formData, targetElement } = Http.commonHttpRequest(element, httpMethodAttribute);
             
             http.setRequestHeader('Accept', 'text/html');
-        
+
             http.onload = function() {
                 Dom.attemptHideLoader(element);
-                Http.handleHttpResponse(http, element);
+                Http.handleHttpResponse(http, element, event);
+
+                // Push URL if mx-push-url is true and the request was successful
+                if (element.getAttribute('mx-push-url') === 'true' && http.status >= 200 && http.status < 300) {
+                    const requestUrl = Utils.getRequestUrl(element);
+                    Utils.pushUrl(requestUrl);
+                }
             };
-        
+
             try {
                 http.send(formData);
             } catch (error) {
@@ -202,63 +273,86 @@
             }
         },
 
-        handleHttpResponse(http, element) {
+        handleHttpResponse(http, element, event) {
             Dom.removeCloak();
             Dom.restoreOriginalContent();
             Dom.reEnableDisabledElements();
-        
+
             element.classList.remove('blink');
-        
+
             if (http.status >= 200 && http.status < 300) {
-                if (http.getResponseHeader('Content-Type').includes('text/html')) {
-                    const targetEl = Dom.establishTargetElement(element);
-        
-                    if (targetEl) {
-                        const successAnimateStr = element.getAttribute('mx-animate-success');
-        
-                        if (successAnimateStr) {
-                            Animation.initAnimateSuccess(targetEl, http, element);
-                        } else {
-                            Modal.initAttemptCloseModal(targetEl, http, element);
-                            Dom.populateTargetEl(targetEl, http, element);
-                        }
+                const contentType = http.getResponseHeader('Content-Type');
+                const targetEl = Dom.establishTargetElement(element);
+
+                if (targetEl) {
+                    const successAnimateStr = element.getAttribute('mx-animate-success');
+                    if (successAnimateStr) {
+                        Animation.initAnimateSuccess(targetEl, http, element);
+                    } else {
+                        Modal.initAttemptCloseModal(targetEl, http, element);
+                        this.updateContent(targetEl, http, element, event);
                     }
-        
-                    Http.attemptInitOnSuccessActions(http, element);
-        
-                } else {
-                    console.log('Response is not HTML. Handle accordingly.');
                 }
+
+                // Push URL if mx-push-url is true and the request was successful
+                if (element.getAttribute('mx-push-url') === 'true') {
+                    const requestUrl = Utils.getRequestUrl(element);
+                    Utils.pushUrl(requestUrl);
+                }
+
+                this.attemptInitOnSuccessActions(http, element);
             } else {
-                console.error('Request failed with status:', http.status);
-                switch (http.status) {
-                    case 404:
-                        console.error('Resource not found');
-                        break;
-                    case 500:
-                        console.error('Server error');
-                        break;
-                    default:
-                        console.error('An error occurred');
-                }
-        
-                const containingForm = element.closest('form');
-                if (containingForm) {
-                    Http.attemptDisplayValidationErrors(http, element, containingForm);
-                }
-        
-                const errorAnimateStr = element.getAttribute('mx-animate-error');
-        
-                if (errorAnimateStr) {
-                    Animation.initAnimateError(element, http, element);
-                } else {
-                    const targetEl = element ?? targetEl;
-                    Modal.initAttemptCloseModal(targetEl, http, element);
-                    Http.attemptInitOnErrorActions(http, element);
-                }
+                this.handleErrorResponse(http, element);
             }
-        
+
             Dom.attemptHideLoader(element);
+        },
+
+        updateContent(targetEl, http, element, event) {
+            const contentType = http.getResponseHeader('Content-Type');
+
+            if (contentType.includes('text/html')) {
+                Dom.populateTargetEl(targetEl, http, element);
+            } else if (contentType.includes('application/json')) {
+                try {
+                    const jsonData = JSON.parse(http.responseText);
+                    targetEl.textContent = JSON.stringify(jsonData, null, 2);
+                } catch (error) {
+                    console.error('Error parsing JSON response:', error);
+                }
+            } else if (contentType.startsWith('image/')) {
+                targetEl.style.backgroundImage = `url('${http.responseURL}')`;
+            } else {
+                // For other content types, just set the responseText
+                targetEl.textContent = http.responseText;
+            }
+
+            // Execute after-swap function for all content types
+            Dom.executeAfterSwap(element, event);
+        },
+
+        handleErrorResponse(http, element) {
+            console.error('Request failed with status:', http.status);
+
+            const containingForm = element.closest('form');
+            if (containingForm) {
+                this.attemptDisplayValidationErrors(http, element, containingForm);
+            }
+
+            const errorAnimateStr = element.getAttribute('mx-animate-error');
+            if (errorAnimateStr) {
+                Animation.initAnimateError(element, http, element);
+            } else {
+                const targetEl = Dom.establishTargetElement(element);
+                Modal.initAttemptCloseModal(targetEl, http, element);
+                this.attemptInitOnErrorActions(http, element);
+            }
+
+            // Display error message in the target element
+            const targetEl = Dom.establishTargetElement(element);
+            if (targetEl) {
+                targetEl.textContent = `Error: ${http.status} ${http.statusText}`;
+            }
         },
 
         attemptInitOnErrorActions(http, element) {
@@ -513,14 +607,18 @@
             return tempContainer.innerHTML;
         },
 
-        executeAfterSwap(element) {
+        executeAfterSwap(element, event) {
             const functionName = element.getAttribute('mx-after-swap');
             if (functionName) {
                 const cleanFunctionName = functionName.replace(/\(\)$/, '');
                 
                 if (typeof window[cleanFunctionName] === 'function') {
                     try {
-                        window[cleanFunctionName]();
+                        // Create a custom event with the original event data
+                        const customEvent = new CustomEvent('afterSwap', {
+                            detail: { originalEvent: event, element: element }
+                        });
+                        window[cleanFunctionName](customEvent);
                     } catch (error) {
                         console.error(`Error executing ${cleanFunctionName}:`, error);
                     }
@@ -657,7 +755,7 @@
     };
 
     const Modal = {
-        buildMXModal(modalData, element, httpMethodAttribute) {
+        buildMXModal(modalData, element, httpMethodAttribute, event) {
             const modalId = typeof modalData === 'string' ? modalData : modalData.id;
 
             const existingEl = document.getElementById(modalId);
@@ -700,7 +798,7 @@
             const modalBodySelector = `#${modalId} .modal-body`;
             element.setAttribute('mx-target', modalBodySelector);
 
-            Http.invokeHttpRequest(element, httpMethodAttribute);
+            Http.invokeHttpRequest(element, httpMethodAttribute, event);
         },
 
         attemptAddModalButtons(targetEl, element) {
@@ -1016,6 +1114,9 @@
             document.querySelectorAll('[mx-trigger*="load"]').forEach(Dom.handlePageLoadedEvents);
 
             Main.attemptInitPolling();
+
+            // Add this line to initialize the popstate event listener
+            window.addEventListener('popstate', Main.handlePopState);
         },
 
         handleTrongateMXEvent(event) {
@@ -1051,15 +1152,15 @@
                 (attribute !== 'mx-get') &&
                 !element.hasAttribute('mx-vals')
             ) {
-                Main.mxSubmitForm(element, triggerEvent, attribute);
+                Main.mxSubmitForm(element, triggerEvent, attribute, event);
             } else {
                 // Special handling for select elements with mx-get and mx-trigger="change"
                 if (element.tagName.toLowerCase() === 'select' && 
                     attribute === 'mx-get' && 
                     element.getAttribute('mx-trigger') === 'change') {
-                    Main.initInvokeHttpRequest(element, attribute);
+                    Main.initInvokeHttpRequest(element, attribute, event);
                 } else {
-                    Main.initInvokeHttpRequest(element, attribute);
+                    Main.initInvokeHttpRequest(element, attribute, event);
                 }
             }
         },
@@ -1085,7 +1186,7 @@
             }
         },
 
-        mxSubmitForm(element, triggerEvent, httpMethodAttribute) {
+        mxSubmitForm(element, triggerEvent, httpMethodAttribute, event) {
             const containingForm = element.closest('form');
             if (!containingForm) {
                 console.error('No containing form found');
@@ -1095,9 +1196,9 @@
             Dom.clearExistingValidationErrors(containingForm);
 
             if (CONFIG.REQUIRES_DATA_ATTRIBUTES.includes(httpMethodAttribute)) {
-                Http.invokeFormPost(element, triggerEvent, httpMethodAttribute, containingForm);
+                Http.invokeFormPost(element, triggerEvent, httpMethodAttribute, containingForm, event);
             } else {
-                Main.initInvokeHttpRequest(containingForm, httpMethodAttribute);
+                Main.initInvokeHttpRequest(containingForm, httpMethodAttribute, event);
             }
         },
 
@@ -1178,6 +1279,19 @@
                     return;
                 }
                 Main.initInvokeHttpRequest(element, attribute);
+            }
+        },
+        handlePopState(event) {
+            const currentPath = window.location.pathname;
+            const element = document.querySelector(`[mx-get^="${currentPath}"]`);
+
+            if (element) {
+                // Simulate a click on the matching element
+                const clickEvent = new Event('click');
+                element.dispatchEvent(clickEvent);
+            } else {
+                // If no matching element is found, reload the page
+                window.location.reload();
             }
         }
     };
